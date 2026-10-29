@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<!--
+  Real-time content for the occluded-app throttling UX demo.
+  Everything is drawn from requestAnimationFrame, so what you see is exactly what the app
+  managed to render: when SurfaceFlinger throttles the app, rAF slows down and this page
+  freezes / jumps, and the "avg gap (1s)" counter shows the recent average frame interval.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live ticker</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0b1020; color: #e8ecf8;
+               font-family: Roboto, Arial, sans-serif; overflow: hidden; }
+  #top { display: flex; justify-content: space-between; align-items: baseline;
+         padding: 12px 20px; background: #141b33; }
+  #label { font-size: 22px; font-weight: bold; color: #ffd54f; }
+  #clock { font: bold 64px/1 "Roboto Mono", monospace; padding: 16px 20px 4px; }
+  #stats { display: flex; gap: 32px; padding: 4px 20px 12px; font: 20px "Roboto Mono", monospace; }
+  .warn { color: #ff6e6e; }
+  #track { position: relative; height: 36px; margin: 8px 20px; background: #1c2545; border-radius: 6px; }
+  #sweep { position: absolute; top: 4px; width: 60px; height: 28px; background: #4fc3f7; border-radius: 4px; }
+  #tape { white-space: nowrap; font: bold 30px "Roboto Mono", monospace; background: #000;
+          padding: 10px 0; margin-top: 8px; overflow: hidden; }
+  #tapeInner { display: inline-block; will-change: transform; }
+  #grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; padding: 14px 20px; }
+  .cell { background: #141b33; border-radius: 6px; padding: 8px 10px; font: 22px "Roboto Mono", monospace; }
+  .sym { color: #9fa8da; font-size: 16px; }
+  .up { color: #66bb6a; } .down { color: #ef5350; }
+</style>
+</head>
+<body>
+<div id="top"><span id="label"></span><span>LIVE MARKET (synthetic)</span></div>
+<div id="clock">--:--:--.---</div>
+<div id="stats">
+  <span>fps: <b id="fps">0</b></span>
+  <span>avg gap (1s): <b id="gap">0</b> ms</span>
+  <span>frames: <b id="frames">0</b></span>
+</div>
+<div id="track"><div id="sweep"></div></div>
+<div id="tape"><span id="tapeInner"></span></div>
+<div id="grid"></div>
+<script>
+  const params = new URLSearchParams(location.search);
+  document.getElementById('label').textContent = params.get('label') || 'occlusion demo';
+
+  const SYMS = ['GOOG', 'AAPL', 'MSFT', 'AMZN', 'NVDA', 'META', 'TSLA', 'NFLX',
+                'AMD', 'INTC', 'ORCL', 'IBM'];
+  const prices = SYMS.map(() => 100 + Math.random() * 400);
+  const deltas = SYMS.map(() => 0);
+  const grid = document.getElementById('grid');
+  const cells = SYMS.map((s) => {
+    const d = document.createElement('div');
+    d.className = 'cell';
+    grid.appendChild(d);
+    return d;
+  });
+
+  const clockEl = document.getElementById('clock');
+  const fpsEl = document.getElementById('fps');
+  const gapEl = document.getElementById('gap');
+  const framesEl = document.getElementById('frames');
+  const sweep = document.getElementById('sweep');
+  const track = document.getElementById('track');
+  const tapeInner = document.getElementById('tapeInner');
+
+  const frameTimes = [];   // timestamps of recent frames (ms)
+  const gaps = [];         // [time, gap] pairs
+  let frames = 0, last = 0, lastPriceUpdate = 0;
+
+  function pad(n, w) { return String(n).padStart(w, '0'); }
+
+  function updatePrices(now) {
+    // New market data every 100 ms of wall time, but it only reaches the screen when a
+    // frame is produced, just like a real app whose rendering is throttled.
+    if (now - lastPriceUpdate < 100) return;
+    lastPriceUpdate = now;
+    for (let i = 0; i < prices.length; i++) {
+      deltas[i] = (Math.random() - 0.5) * prices[i] * 0.004;
+      prices[i] = Math.max(1, prices[i] + deltas[i]);
+    }
+    let tape = '';
+    for (let i = 0; i < SYMS.length; i++) {
+      const up = deltas[i] >= 0;
+      cells[i].innerHTML = '<div class="sym">' + SYMS[i] + '</div><span class="' +
+          (up ? 'up' : 'down') + '">' + prices[i].toFixed(2) + (up ? ' \u25B2' : ' \u25BC') + '</span>';
+      tape += '<span class="' + (up ? 'up' : 'down') + '">' + SYMS[i] + ' ' +
+          prices[i].toFixed(2) + (up ? ' \u25B2' : ' \u25BC') + '</span>&nbsp;&nbsp;&nbsp;&nbsp;';
+    }
+    tapeInner.innerHTML = tape + tape;
+  }
+
+  function frame(ts) {
+    const now = performance.now();
+    if (last) gaps.push([now, now - last]);
+    last = now;
+    frames++;
+    frameTimes.push(now);
+    while (frameTimes.length && now - frameTimes[0] > 1000) frameTimes.shift();
+    while (gaps.length && now - gaps[0][0] > 1000) gaps.shift();
+    const avgGap = gaps.length ? gaps.reduce((s, g) => s + g[1], 0) / gaps.length : 0;
+
+    const d = new Date();
+    clockEl.textContent = pad(d.getHours(), 2) + ':' + pad(d.getMinutes(), 2) + ':' +
+        pad(d.getSeconds(), 2) + '.' + pad(d.getMilliseconds(), 3);
+    fpsEl.textContent = frameTimes.length;
+    gapEl.textContent = avgGap.toFixed(0);
+    gapEl.className = avgGap > 50 ? 'warn' : '';
+    framesEl.textContent = frames;
+
+    // Position is a function of wall time, so a stall shows up as a visible jump.
+    const w = track.clientWidth - 60;
+    const phase = (now % 2000) / 2000;
+    sweep.style.left = (phase < 0.5 ? phase * 2 : 2 - phase * 2) * w + 'px';
+    const tapeWidth = tapeInner.scrollWidth / 2 || 1;
+    tapeInner.style.transform = 'translateX(' + (-((now * 0.2) % tapeWidth)) + 'px)';
+
+    updatePrices(now);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+</script>
+</body>
+</html>
